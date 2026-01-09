@@ -51,7 +51,7 @@ use pyo3::prelude::*;
 /// This function is called by Python when importing the module.
 /// It registers all Python-exposed types and functions.
 #[pymodule]
-fn lattice_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register reactive primitives
     m.add_class::<reactive::PySignal>()?;
 

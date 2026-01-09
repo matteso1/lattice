@@ -187,38 +187,66 @@ class Memo(Generic[T]):
         self._fn = fn
         self._value: Optional[T] = None
         self._dirty = True
-        self._dependencies: Set[Signal] = set()
+        self._dependencies: Set[Any] = set()  # Can be Signal or Memo
+        self._dependents: Set[Any] = set()  # Memos or Effects that depend on us
     
     def __call__(self) -> T:
         """Get the memo's value, recomputing if necessary."""
+        # Track this memo as a dependency if inside a reactive context
+        ctx = _get_current_context()
+        if ctx is not None:
+            ctx.track(self)
+        
         if self._dirty:
             self._recompute()
         return self._value  # type: ignore
     
+    def _subscribe(self, dependent: Any) -> None:
+        """Add a dependent to be notified on changes."""
+        self._dependents.add(dependent)
+    
+    def _unsubscribe(self, dependent: Any) -> None:
+        """Remove a dependent."""
+        self._dependents.discard(dependent)
+    
     def _recompute(self) -> None:
         """Recompute the memo's value and update dependencies."""
         # Clear old subscriptions
-        for sig in self._dependencies:
-            sig._unsubscribe(self)
+        for dep in self._dependencies:
+            dep._unsubscribe(self)
         
         # Run computation within a tracking context
         with _ReactiveContext() as ctx:
             self._value = self._fn()
         
-        # Subscribe to new dependencies
+        # Subscribe to new dependencies (can be Signal or Memo)
         self._dependencies = ctx.dependencies
-        for sig in self._dependencies:
-            sig._subscribe(self)
+        for dep in self._dependencies:
+            dep._subscribe(self)
         
         self._dirty = False
+        
+        # Notify our dependents that we recomputed
+        self._notify()
+    
+    def _notify(self) -> None:
+        """Notify all dependents that our value changed."""
+        for dep in list(self._dependents):
+            dep._on_dependency_changed()
     
     def _on_dependency_changed(self) -> None:
         """Called when one of our dependencies changes."""
+        was_dirty = self._dirty
         self._dirty = True
+        # Propagate dirtiness to our dependents
+        if not was_dirty:
+            for dep in list(self._dependents):
+                dep._on_dependency_changed()
     
     def __repr__(self) -> str:
         state = "dirty" if self._dirty else "clean"
         return f"Memo({self._fn.__name__}, {state})"
+
 
 
 class Effect:
@@ -248,7 +276,7 @@ class Effect:
             fn: A function to run as a side effect.
         """
         self._fn = fn
-        self._dependencies: Set[Signal] = set()
+        self._dependencies: Set[Any] = set()  # Can be Signal or Memo
         self._disposed = False
         
         # Run immediately to establish dependencies
@@ -260,17 +288,17 @@ class Effect:
             return
         
         # Clear old subscriptions
-        for sig in self._dependencies:
-            sig._unsubscribe(self)
+        for dep in self._dependencies:
+            dep._unsubscribe(self)
         
         # Run within a tracking context
         with _ReactiveContext() as ctx:
             self._fn()
         
-        # Subscribe to new dependencies
+        # Subscribe to new dependencies (can be Signal or Memo)
         self._dependencies = ctx.dependencies
-        for sig in self._dependencies:
-            sig._subscribe(self)
+        for dep in self._dependencies:
+            dep._subscribe(self)
     
     def _on_dependency_changed(self) -> None:
         """Called when one of our dependencies changes."""
@@ -279,9 +307,10 @@ class Effect:
     def dispose(self) -> None:
         """Stop the effect from running."""
         self._disposed = True
-        for sig in self._dependencies:
-            sig._unsubscribe(self)
+        for dep in self._dependencies:
+            dep._unsubscribe(self)
         self._dependencies.clear()
+
     
     def __repr__(self) -> str:
         state = "disposed" if self._disposed else "active"

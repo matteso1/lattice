@@ -1,222 +1,249 @@
 # Lattice Architecture
 
-This document describes the technical architecture of Lattice, explaining how the
-components work together to provide a high-performance reactive UI framework.
-
-## Table of Contents
-
-1. [Design Goals](#design-goals)
-2. [System Overview](#system-overview)
-3. [Core Components](#core-components)
-4. [Data Flow](#data-flow)
-5. [Execution Modes](#execution-modes)
-6. [Performance Characteristics](#performance-characteristics)
-
-## Design Goals
-
-Lattice is designed around five core principles:
-
-1. **Incremental Computation**: Never recompute more than necessary. When state
-   changes, only the dependent computations should re-execute.
-
-2. **Zero-Cost Abstractions**: The Python API should feel natural while the
-   underlying implementation achieves near-native performance.
-
-3. **Multi-Target Execution**: The same application code should run server-side,
-   in WebAssembly, or in a hybrid configuration.
-
-4. **Collaborative by Default**: Real-time collaboration should be a first-class
-   feature, not an afterthought.
-
-5. **Debuggability**: The system should be transparent and easy to understand
-   when things go wrong.
+This document describes the technical architecture of Lattice, a reactive Python framework with a Rust-powered core.
 
 ## System Overview
 
-```
-+------------------------------------------------------------------+
-|                        Python Layer                               |
-|  +------------------+  +------------------+  +------------------+ |
-|  | User Application |  | Component DSL    |  | Python Bindings  | |
-|  +------------------+  +------------------+  +------------------+ |
-+------------------------------------------------------------------+
-                              |
-                              | PyO3
-                              v
-+------------------------------------------------------------------+
-|                        Rust Core                                  |
-|  +------------------+  +------------------+  +------------------+ |
-|  | Reactive Runtime |  | Incremental Eng. |  | Render Pipeline  | |
-|  +------------------+  +------------------+  +------------------+ |
-|  +------------------+  +------------------+  +------------------+ |
-|  | CRDT Layer       |  | Transport        |  | Data Operations  | |
-|  +------------------+  +------------------+  +------------------+ |
-+------------------------------------------------------------------+
-                              |
-                              v
-+------------------------------------------------------------------+
-|                     Execution Targets                             |
-|  +------------------+  +------------------+  +------------------+ |
-|  | Server (Native)  |  | Browser (WASM)   |  | Hybrid           | |
-|  +------------------+  +------------------+  +------------------+ |
-+------------------------------------------------------------------+
+```mermaid
+flowchart TB
+    subgraph User["User Code"]
+        APP["Python Application"]
+    end
+    
+    subgraph Python["Python Layer"]
+        API["Public API<br/>signal, memo, effect"]
+        CTX["ReactiveContext<br/>Thread-local tracking"]
+        WRAP["Type Wrappers<br/>Signal, Memo, Effect"]
+    end
+    
+    subgraph Rust["Rust Core (PyO3)"]
+        SIG["Signal Runtime<br/>Mutable state, notifications"]
+        RT["Runtime<br/>Global registry, scheduling"]
+        GRAPH["Dependency Graph<br/>Topological ordering"]
+    end
+    
+    subgraph Future["Future Components"]
+        RENDER["Rendering Pipeline"]
+        TRANSPORT["WebSocket Transport"]
+        CRDT["CRDT Collaboration"]
+    end
+    
+    APP --> API
+    API --> CTX
+    CTX --> WRAP
+    WRAP --> SIG
+    SIG --> RT
+    RT --> GRAPH
+    
+    GRAPH -.-> RENDER
+    RENDER -.-> TRANSPORT
+    TRANSPORT -.-> CRDT
 ```
 
 ## Core Components
 
-### 1. Reactive Runtime
+### 1. Reactive Primitives
 
-The reactive runtime manages the dependency graph between signals, memos, and
-effects. It tracks which computations depend on which pieces of state.
+The foundation of Lattice is three reactive primitives:
 
-Key concepts:
+```mermaid
+flowchart LR
+    subgraph Primitives
+        S["Signal<br/>Mutable state"]
+        M["Memo<br/>Cached derived value"]
+        E["Effect<br/>Side effect"]
+    end
+    
+    S -->|"notifies"| M
+    S -->|"notifies"| E
+    M -->|"notifies"| E
+```
 
-- **Signal**: A container for mutable state. When read within a tracking context,
-  the signal registers the current computation as a dependent.
+| Primitive | Purpose | Evaluation | Thread-Safe |
+| --------- | ------- | ---------- | ----------- |
+| Signal | Hold mutable state | Immediate | Yes |
+| Memo | Cache derived values | Lazy (on access) | Yes |
+| Effect | Run side effects | Eager (on change) | Yes |
 
-- **Memo**: A derived value that caches its result. Re-evaluates only when its
-  dependencies change.
+### 2. Dependency Tracking
 
-- **Effect**: A side-effecting computation that runs when its dependencies change.
+Dependencies are tracked automatically using a context stack:
 
-Implementation details are in `lattice-core/src/reactive/`.
+```mermaid
+sequenceDiagram
+    participant User
+    participant Effect
+    participant Context
+    participant Signal
+    
+    User->>Effect: Create effect
+    Effect->>Context: Push context
+    Effect->>Signal: Read value
+    Signal->>Context: Register dependency
+    Effect->>Context: Pop context
+    
+    Note over Effect,Signal: Dependency established
+    
+    User->>Signal: Set new value
+    Signal->>Effect: Notify change
+    Effect->>Effect: Re-run
+```
 
-### 2. Incremental Computation Engine
+**Implementation:**
 
-The incremental engine determines the minimal set of computations to re-run when
-state changes. This is inspired by Differential Dataflow but adapted for UI
-rendering.
+- Thread-local stack (`_ReactiveContext`)
+- Each memo/effect pushes itself onto the stack
+- Signal reads check the stack and register dependencies
+- On pop, memo/effect subscribes to all tracked signals
 
-The algorithm:
+### 3. Update Propagation
 
-1. When a signal value changes, mark all direct dependents as "potentially dirty"
-2. Walk the dependency graph, propagating the dirty state
-3. For each dirty computation, check if its inputs actually changed
-4. If inputs changed, re-run the computation and propagate to dependents
-5. If inputs are the same, mark as clean without re-running
+When a signal changes, updates propagate through the graph:
 
-This is called "push-pull" dirty checking: we push dirty flags down and pull
-recomputation up only when needed.
+```mermaid
+flowchart TD
+    subgraph "1. Signal Changes"
+        S[Signal A]
+    end
+    
+    subgraph "2. Mark Phase"
+        M1[Memo X<br/>mark dirty]
+        M2[Memo Y<br/>mark dirty]
+        E1[Effect 1<br/>schedule]
+    end
+    
+    subgraph "3. Execute Phase"
+        RUN[Run scheduled effects]
+    end
+    
+    S --> M1
+    S --> M2
+    S --> E1
+    M1 --> RUN
+    M2 --> RUN
+    E1 --> RUN
+```
 
-### 3. Rendering Pipeline
+**Key behaviors:**
 
-The rendering pipeline converts the component tree into DOM updates:
+- Memos are lazy: marked dirty but not recomputed until accessed
+- Effects are eager: scheduled and run immediately
+- Diamond dependencies: handled correctly (each node runs once)
 
-1. **Virtual DOM Construction**: Components return a virtual DOM representation
-2. **Diffing**: Compare new virtual DOM against previous version
-3. **Patch Generation**: Generate minimal set of DOM operations
-4. **Patch Transmission**: Send patches to client via WebSocket or apply directly
+### 4. Runtime Registry
 
-The renderer uses keyed reconciliation for efficient list updates.
+The global runtime tracks all reactive values:
 
-### 4. CRDT Layer
+```mermaid
+flowchart LR
+    subgraph Runtime
+        REG[Registry<br/>SubscriberId -> Reactive]
+        DEPS[Dependencies<br/>SignalId -> Subscribers]
+    end
+    
+    subgraph Operations
+        ADD[Register]
+        REM[Unregister]
+        NOTIFY[Notify Change]
+    end
+    
+    ADD --> REG
+    REM --> REG
+    NOTIFY --> DEPS
+    DEPS --> REG
+```
 
-For collaborative features, application state is represented as Conflict-free
-Replicated Data Types (CRDTs). This enables:
+**Data structures:**
 
-- Offline editing with automatic sync on reconnection
-- Concurrent edits by multiple users without conflicts
-- Deterministic state resolution across all clients
-
-We implement a subset of the Yjs protocol for compatibility with existing tools.
-
-### 5. Transport Layer
-
-Communication between server and client uses a binary protocol:
-
-- **WebSocket**: For real-time bidirectional communication
-- **MessagePack**: Binary serialization format (30% smaller than JSON)
-- **WebRTC**: Optional peer-to-peer communication for reduced latency
+- `OnceLock<RwLock<HashMap>>` for thread-safe lazy initialization
+- Weak references to avoid preventing cleanup
+- Automatic cleanup on handle drop
 
 ## Data Flow
 
-A typical interaction follows this path:
+### Read Path
 
-```
-1. User interacts with UI element in browser
-
-2. Client serializes event, sends via WebSocket
-
-3. Server deserializes event, updates signal value
-
-4. Reactive runtime marks dependents as dirty
-
-5. Incremental engine determines minimal recomputation
-
-6. Affected computations re-run
-
-7. Renderer diffs the changed component subtrees
-
-8. Patches sent to client via WebSocket
-
-9. Client applies patches to DOM
+```mermaid
+flowchart LR
+    A[User reads signal.value] --> B{Active context?}
+    B -->|Yes| C[Track dependency]
+    B -->|No| D[Return value]
+    C --> D
 ```
 
-Total latency target: under 10ms for steps 2-9.
+### Write Path
 
-## Execution Modes
+```mermaid
+flowchart LR
+    A[User sets signal.value] --> B[Update value]
+    B --> C[Notify local subscribers]
+    C --> D[Notify runtime]
+    D --> E[Mark memos dirty]
+    E --> F[Schedule effects]
+    F --> G[Run effects]
+```
 
-### Server Mode
+## File Structure
 
-The Rust core runs on the server. All computation happens server-side.
-The client is a thin layer that applies DOM patches.
-
-Advantages:
-
-- Full access to server resources (files, databases)
-- Simpler security model
-- Works with any data size
-
-Disadvantages:
-
-- Requires server infrastructure
-- Latency for each interaction
-
-### WASM Mode
-
-The Rust core compiles to WebAssembly and runs in the browser.
-No server required after initial load.
-
-Advantages:
-
-- No server infrastructure needed
-- Works offline
-- Zero-latency interactions
-
-Disadvantages:
-
-- Limited data size (browser memory)
-- Initial load time for WASM bundle
-- Cannot access server resources directly
-
-### Hybrid Mode
-
-Core runs in browser, but can stream data from server.
-Best of both worlds for many use cases.
+```
+lattice-core/
+    src/
+        lib.rs              # PyO3 module entry
+        reactive/
+            mod.rs          # Module exports
+            signal.rs       # Signal<T> and PySignal
+            memo.rs         # Memo<T> with caching
+            effect.rs       # Effect with scheduling
+            context.rs      # ReactiveContext stack
+            runtime.rs      # Global registry
+            subscriber.rs   # SubscriberId type
+        graph/
+            mod.rs          # Graph module
+            node.rs         # Node types
+            scheduler.rs    # Update scheduler
+    python/
+        lattice/
+            __init__.py     # Python API
+```
 
 ## Performance Characteristics
 
-### Time Complexity
-
 | Operation | Complexity | Notes |
-|-----------|------------|-------|
-| Signal read | O(1) | Hash table lookup |
-| Signal write | O(d) | d = number of direct dependents |
-| Incremental update | O(delta) | delta = changed nodes in graph |
-| DOM patch | O(p) | p = number of patches |
+| --------- | ---------- | ----- |
+| Signal read | O(1) | Hash lookup for context check |
+| Signal write | O(k) | k = number of direct dependents |
+| Memo compute | O(1) + f(n) | f(n) = user computation time |
+| Effect run | O(1) + f(n) | f(n) = user function time |
+| Update propagation | O(delta) | Only touched nodes, not full graph |
 
-### Memory Usage
+## Thread Safety
 
-- Each signal: ~48 bytes + value size
-- Each memo: ~64 bytes + cached value size
-- Dependency edges: ~16 bytes each
+All primitives are thread-safe:
 
-### Benchmarks
+- `Signal`: `Arc<RwLock<T>>` for value storage
+- `Memo`: `Arc<RwLock>` for cache and state
+- `Effect`: `AtomicBool` for disposal flag
+- `Runtime`: `OnceLock + RwLock` for global state
+- `Context`: Thread-local (no sharing needed)
 
-Target performance (to be validated):
+## Future Architecture
 
-| Metric | Streamlit | Lattice Target |
-|--------|-----------|----------------|
-| Update latency | 100-500ms | less than 10ms |
-| Memory per session | 50-100MB | less than 10MB |
-| Concurrent users | ~50 | 1000+ |
+### Phase 2: Rendering
+
+```mermaid
+flowchart LR
+    STATE[Reactive State] --> VDOM[Virtual DOM]
+    VDOM --> DIFF[Diff Engine]
+    DIFF --> PATCH[UI Patches]
+    PATCH --> CLIENT[Browser Client]
+```
+
+### Phase 3: Collaboration
+
+```mermaid
+flowchart LR
+    CLIENT1[Client A] --> CRDT[CRDT Layer]
+    CLIENT2[Client B] --> CRDT
+    CRDT --> MERGE[Automatic Merge]
+    MERGE --> SYNC[Sync to All]
+```

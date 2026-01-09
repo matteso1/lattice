@@ -6,8 +6,7 @@ build-backend = "maturin"
 name = "lattice-core"
 version = "0.1.0"
 description = "Core runtime for the Lattice reactive UI framework"
-readme = "README.md"
-license = {file = "LICENSE"}
+readme = "../README.md"
 requires-python = ">=3.11"
 authors = [
     {name = "Matteo Esposito"}

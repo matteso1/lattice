@@ -1,85 +1,216 @@
-# Development Roadmap
+# Lattice Development Roadmap
 
-This document outlines the phased implementation plan for Lattice.
+This document outlines the development plan for Lattice across four phases.
 
-## Phase 1: Core Runtime (Weeks 1-4)
+## Timeline Overview
 
-The foundation: reactive primitives and incremental computation.
+```mermaid
+gantt
+    title Lattice Development Phases
+    dateFormat YYYY-MM-DD
+    
+    section Phase 1
+    Reactive Core           :done, p1a, 2026-01-09, 7d
+    Dependency Graph        :done, p1b, after p1a, 3d
+    Python Bindings         :done, p1c, after p1b, 4d
+    
+    section Phase 2
+    Component Model         :p2a, after p1c, 7d
+    Virtual DOM             :p2b, after p2a, 7d
+    WebSocket Transport     :p2c, after p2b, 7d
+    
+    section Phase 3
+    CRDT Foundation         :p3a, after p2c, 7d
+    Conflict Resolution     :p3b, after p3a, 7d
+    Presence System         :p3c, after p3b, 7d
+    
+    section Phase 4
+    JIT Compilation         :p4a, after p3c, 7d
+    WASM Target             :p4b, after p4a, 7d
+    Performance Tuning      :p4c, after p4b, 7d
+```
 
-### Week 1-2: Reactive Primitives
+## Phase 1: Core Runtime (CURRENT)
 
-Implement the core reactive system in Rust:
+Build the reactive foundation.
 
-- Signal: Mutable state container with dependency tracking
-- Memo: Cached derived values
-- Effect: Side-effecting computations
+```mermaid
+flowchart TB
+    subgraph Complete["Completed"]
+        S[Signal Primitive]
+        M[Memo Primitive]
+        E[Effect Primitive]
+        RT[Runtime Registry]
+        CTX[Context Tracking]
+        PY[Python Bindings]
+    end
+    
+    subgraph Next["Next Steps"]
+        BUILD[Build Package]
+        DEMO[Demo App]
+        BENCH[Benchmarks]
+    end
+    
+    S --> RT
+    M --> RT
+    E --> RT
+    RT --> CTX
+    CTX --> PY
+    PY --> BUILD
+    BUILD --> DEMO
+    DEMO --> BENCH
+```
 
-These follow the fine-grained reactivity model used in SolidJS and Leptos.
+### Milestones
 
-### Week 3-4: Incremental Computation Engine
+| Task | Status | Notes |
+| ---- | ------ | ----- |
+| Signal with auto-tracking | Done | Rust + Python wrapper |
+| Memo with caching | Done | Lazy evaluation |
+| Effect with scheduling | Done | Eager execution |
+| Runtime registry | Done | Global dependency tracking |
+| Python API | Done | Decorators and context |
+| Build with maturin | In Progress | Create wheel |
+| Demo application | Planned | Compare vs Streamlit |
+| Benchmarks | Planned | Performance validation |
 
-Build the dependency graph and delta propagation:
+## Phase 2: Rendering and Transport
 
-- Computational DAG data structure
-- Push-pull dirty checking algorithm
-- Minimal recomputation scheduling
+Build UI primitives and network layer.
 
-## Phase 2: Rendering and Transport (Weeks 5-8)
+```mermaid
+flowchart LR
+    subgraph Components
+        COMP[Component Model]
+        VDOM[Virtual DOM]
+        DIFF[Diff Algorithm]
+    end
+    
+    subgraph Transport
+        WS[WebSocket Server]
+        PROTO[Binary Protocol]
+        PATCH[Patch Streaming]
+    end
+    
+    subgraph Client
+        JS[JavaScript Runtime]
+        DOM[DOM Patcher]
+    end
+    
+    COMP --> VDOM
+    VDOM --> DIFF
+    DIFF --> PATCH
+    PATCH --> WS
+    WS --> PROTO
+    PROTO --> JS
+    JS --> DOM
+```
 
-Connect the reactive core to actual UI rendering.
+### Milestones
 
-### Week 5-6: Virtual DOM and Diffing
+| Task | Status | Notes |
+| ---- | ------ | ----- |
+| Component decorator | Planned | Define UI components |
+| Virtual DOM tree | Planned | Efficient representation |
+| Diff algorithm | Planned | Minimal patch generation |
+| WebSocket server | Planned | Tokio-based async |
+| MessagePack protocol | Planned | Compact binary format |
+| JavaScript client | Planned | Minimal DOM patcher |
 
-- Virtual DOM representation in Rust
-- Keyed diffing algorithm
-- Patch generation
+## Phase 3: Collaboration Layer
 
-### Week 7-8: WebSocket Transport
+Real-time multi-user support.
 
-- Server implementation with Tokio
-- Binary protocol with MessagePack
-- Minimal TypeScript client
+```mermaid
+flowchart TB
+    subgraph CRDT["CRDT Layer"]
+        LWW[Last-Write-Wins]
+        COUNTER[Counters]
+        TEXT[Text (Yjs-style)]
+    end
+    
+    subgraph Sync["Synchronization"]
+        VEC[Version Vectors]
+        MERGE[Auto-Merge]
+        CONFLICT[Conflict Resolution]
+    end
+    
+    subgraph Presence["Presence"]
+        CURSOR[Cursor Sharing]
+        AWARE[Awareness Protocol]
+    end
+    
+    LWW --> MERGE
+    COUNTER --> MERGE
+    TEXT --> MERGE
+    MERGE --> VEC
+    VEC --> CONFLICT
+    CONFLICT --> CURSOR
+    CURSOR --> AWARE
+```
 
-## Phase 3: Collaboration Layer (Weeks 9-12)
+### Milestones
 
-Add real-time collaboration support.
+| Task | Status | Notes |
+| ---- | ------ | ----- |
+| LWW Register CRDT | Planned | Basic conflict-free type |
+| Counter CRDT | Planned | For numeric values |
+| Text CRDT | Planned | Collaborative editing |
+| Version vectors | Planned | Causality tracking |
+| Presence system | Planned | User awareness |
 
-### Week 9-10: CRDT Implementation
+## Phase 4: Performance Optimization
 
-- Design state model as CRDTs
-- Implement sync protocol
+Advanced compilation and execution.
 
-### Week 11-12: Multiplayer Features
+```mermaid
+flowchart LR
+    subgraph Compile["Compilation"]
+        TRACE[Trace Capture]
+        IR[Intermediate Rep]
+        LLVM[LLVM Backend]
+    end
+    
+    subgraph Targets["Targets"]
+        NATIVE[Native Code]
+        WASM[WebAssembly]
+    end
+    
+    subgraph Optimize["Optimization"]
+        INLINE[Inlining]
+        BATCH[Batching]
+        CACHE[Cache Warming]
+    end
+    
+    TRACE --> IR
+    IR --> LLVM
+    LLVM --> NATIVE
+    LLVM --> WASM
+    NATIVE --> INLINE
+    WASM --> BATCH
+    INLINE --> CACHE
+```
 
-- Presence API (cursors, selections)
-- Offline persistence
+### Milestones
 
-## Phase 4: Performance Optimization (Weeks 13-16)
+| Task | Status | Notes |
+| ---- | ------ | ----- |
+| Expression tracing | Planned | Capture computation graph |
+| LLVM integration | Planned | JIT compilation |
+| WASM compilation | Planned | Browser execution |
+| Performance benchmarks | Planned | Validation suite |
 
-Push performance to the limit.
+## Success Metrics
 
-### Week 13-14: JIT Compilation
+| Metric | Target | Current |
+| ------ | ------ | ------- |
+| Update latency | < 10ms | TBD |
+| Memory per signal | < 100 bytes | TBD |
+| Throughput | > 100k updates/sec | TBD |
+| Build size (WASM) | < 500KB | N/A |
 
-- Python function tracing
-- Rust IR generation
-- LLVM backend integration
+## Getting Involved
 
-### Week 15-16: Data Operations
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for development guidelines.
 
-- Polars integration
-- SIMD vectorization
-- Parallel execution
-
-## Milestones
-
-| Milestone | Target | Success Criteria |
-|-----------|--------|------------------|
-| M1: Reactive Core | Week 2 | Signals, memos, effects working |
-| M2: Basic App | Week 6 | Counter app running in browser |
-| M3: Benchmark | Week 8 | Demonstrate 10x faster than Streamlit |
-| M4: Collaboration | Week 12 | Two users editing same app |
-| M5: Production Ready | Week 16 | Full feature set, documentation |
-
-## Current Status
-
-Phase 1, Week 1: Project setup and initial implementation.
+Current priority: **Phase 1 completion** - build package and create demo app.
