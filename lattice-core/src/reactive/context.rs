@@ -16,11 +16,11 @@
 use std::cell::RefCell;
 use super::SubscriberId;
 
-/// The reactive context stack.
-///
-/// Each thread has its own stack to track which computation is running.
-/// This thread-local approach avoids the need for synchronization in the
-/// common case of single-threaded reactivity.
+// The reactive context stack.
+//
+// Each thread has its own stack to track which computation is running.
+// This thread-local approach avoids the need for synchronization in the
+// common case of single-threaded reactivity.
 thread_local! {
     static CONTEXT_STACK: RefCell<Vec<ContextEntry>> = RefCell::new(Vec::new());
 }

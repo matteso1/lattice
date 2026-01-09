@@ -27,7 +27,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::collections::HashSet;
-use std::hash::Hash;
 use std::fmt::Debug;
 
 use pyo3::prelude::*;
