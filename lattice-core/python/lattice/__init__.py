@@ -7,22 +7,18 @@ The core runtime is implemented in Rust for performance.
 Example usage:
 
     from lattice import signal, memo, effect
+    from lattice.component import component, div, h1, button
 
     # Create reactive state
     count = signal(0)
 
-    # Create derived values
-    @memo
-    def doubled():
-        return count.value * 2
-
-    # Create side effects
-    @effect
-    def log_changes():
-        print(f"Count: {count.value}, Doubled: {doubled()}")
-
-    # Update state (triggers effects)
-    count.value = 5
+    # Create a UI component
+    @component
+    def counter():
+        return div(
+            h1(f"Count: {count.value}"),
+            button("Increment", on_click=lambda: count.value += 1)
+        )
 """
 
 from typing import Callable, TypeVar, Generic, Optional, Set, Any
@@ -33,6 +29,7 @@ from lattice._core import Signal as _Signal
 
 __version__ = "0.1.0"
 __all__ = ["signal", "Signal", "memo", "Memo", "effect", "Effect"]
+
 
 
 # Thread-local storage for tracking the current reactive context.
