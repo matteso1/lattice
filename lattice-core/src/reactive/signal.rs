@@ -33,6 +33,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
 use super::context::ReactiveContext;
+use super::runtime::Runtime;
 use super::SubscriberId;
 
 /// Counter for generating unique signal IDs.
@@ -107,12 +108,16 @@ where
         if ReactiveContext::is_active() {
             ReactiveContext::track_dependency(self.id);
 
-            // Register the current subscriber
+            // Register the current subscriber with both local and global tracking
             if let Some(subscriber_id) = ReactiveContext::current_subscriber() {
+                // Local tracking (for signal-specific notification)
                 self.subscribers
                     .write()
                     .expect("subscriber lock poisoned")
                     .insert(subscriber_id);
+                
+                // Global tracking (for runtime-managed updates)
+                Runtime::add_dependency(self.id, subscriber_id);
             }
         }
 
@@ -144,8 +149,11 @@ where
             *guard = value;
         }
 
-        // Notify all subscribers
+        // Notify local subscribers
         self.notify_subscribers();
+        
+        // Notify the global runtime
+        Runtime::notify_signal_change(self.id);
     }
 
     /// Update the value using a function.

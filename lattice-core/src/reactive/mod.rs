@@ -38,9 +38,11 @@ mod context;
 mod subscriber;
 mod memo;
 mod effect;
+mod runtime;
 
 pub use signal::{Signal, PySignal};
 pub use context::ReactiveContext;
 pub use subscriber::{Subscriber, SubscriberId};
 pub use memo::{Memo, MemoState};
 pub use effect::Effect;
+pub use runtime::{Runtime, Reactive, ReactiveHandle};
