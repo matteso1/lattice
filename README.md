@@ -2,116 +2,89 @@
 
 A reactive Python framework for building high-performance data applications.
 
+## What is Lattice?
+
+Lattice is a Python UI framework that uses **incremental computation** to make data applications fast. Instead of re-executing your entire program when something changes, Lattice tracks dependencies and updates only what needs updating.
+
 ## The Problem
 
-Building interactive data applications in Python today is painful:
+Data application frameworks like Streamlit re-run your entire script on every user interaction:
 
+```mermaid
+flowchart LR
+    A[User clicks button] --> B[Run entire script]
+    B --> C[Load data]
+    C --> D[Process data]
+    D --> E[Compute stats]
+    E --> F[Generate charts]
+    F --> G[Render UI]
 ```
-You write a Streamlit app.
-User moves a slider.
-Your entire script reruns.
-Every. Single. Time.
-```
 
-This means:
+This causes:
 
-- Slow interactions (100-500ms delays)
-- Wasted computation (recalculating things that did not change)
-- Poor scalability (memory and CPU blow up with users)
-- No collaboration (each user is isolated)
-
-Existing tools force you to choose between ease of use and performance. Streamlit is simple but slow. Dash is faster but complex. Neither supports real-time collaboration.
+- **Slow interactions**: 100-500ms delays on every click
+- **Wasted computation**: Recalculating unchanged values
+- **Poor scalability**: Memory and CPU usage grows with complexity
+- **No collaboration**: Each user session is isolated
 
 ## The Solution
 
-Lattice rethinks how Python UI frameworks work:
+Lattice only re-runs the code that depends on what changed:
 
-```
-You write a Lattice app.
-User moves a slider.
-Only the affected code reruns.
-Everything else stays cached.
+```mermaid
+flowchart LR
+    A[User clicks button] --> B[Update signal]
+    B --> C{What depends on this?}
+    C --> D[Recompute affected memo]
+    D --> E[Patch UI]
+    
+    style B fill:#2ecc71
+    style D fill:#2ecc71
+    style E fill:#2ecc71
 ```
 
-This is called **incremental computation**. Instead of re-executing your entire program, Lattice tracks dependencies and updates only what changed.
+Result: **Sub-10ms updates** instead of hundreds of milliseconds.
 
 ## How It Works
 
-### Traditional Approach (Streamlit)
-
-```
-User Input
-    |
-    v
-+------------------+
-| Rerun Everything |  <-- Entire script executes
-+------------------+
-    |
-    v
-Render Full UI
-```
-
-### Lattice Approach
-
-```
-User Input
-    |
-    v
-+------------------+
-| Update Signal    |  <-- Only the changed value
-+------------------+
-    |
-    v
-+------------------+
-| Propagate Delta  |  <-- Only affected computations
-+------------------+
-    |
-    v
-Patch UI
-```
-
-## Architecture
-
-The framework has three layers:
-
-```
-+-----------------------------------------------------------+
-|                     Python API                             |
-|  Decorators, type hints, familiar syntax                   |
-+-----------------------------------------------------------+
-                           |
-                           | PyO3 bindings
-                           v
-+-----------------------------------------------------------+
-|                     Rust Core                              |
-|  Reactive runtime, dependency graph, incremental engine    |
-+-----------------------------------------------------------+
-                           |
-                           v
-+-----------------------------------------------------------+
-|                  Execution Targets                         |
-|  Server (native)  |  Browser (WASM)  |  Hybrid             |
-+-----------------------------------------------------------+
-```
-
 ### Reactive Primitives
 
-The core abstraction is the **signal**: a container for mutable state that tracks its dependents.
+Lattice provides three core primitives:
+
+```mermaid
+flowchart TB
+    subgraph Signals
+        S1[count = signal 0]
+        S2[name = signal Alice]
+    end
+    
+    subgraph Memos
+        M1[doubled = count * 2]
+        M2[greeting = Hello name]
+    end
+    
+    subgraph Effects
+        E1[log count to console]
+        E2[update DOM]
+    end
+    
+    S1 --> M1
+    S1 --> E1
+    S2 --> M2
+    M1 --> E2
+    M2 --> E2
+```
+
+**Signals** hold mutable state:
 
 ```python
 from lattice import signal
 
-# Create reactive state
 count = signal(0)
-
-# Read value (establishes dependency if inside reactive context)
-print(count.value)  # 0
-
-# Write value (notifies all dependents)
-count.value = 5
+count.value = 5  # Notifies all dependents
 ```
 
-**Memos** are cached computations that re-evaluate only when dependencies change:
+**Memos** cache derived values:
 
 ```python
 from lattice import signal, memo
@@ -120,15 +93,10 @@ count = signal(0)
 
 @memo
 def doubled():
-    return count.value * 2
-
-print(doubled())  # 0
-count.value = 5
-print(doubled())  # 10 (recomputed because count changed)
-print(doubled())  # 10 (cached, count did not change)
+    return count.value * 2  # Only recomputes when count changes
 ```
 
-**Effects** are side effects that run when dependencies change:
+**Effects** run side effects:
 
 ```python
 from lattice import signal, effect
@@ -137,44 +105,105 @@ count = signal(0)
 
 @effect
 def log_changes():
-    print(f"Count is now: {count.value}")
-
-count.value = 1  # Prints: "Count is now: 1"
-count.value = 2  # Prints: "Count is now: 2"
+    print(f"Count: {count.value}")  # Runs when count changes
 ```
 
-### Dependency Graph
+### Dependency Tracking
 
-Lattice builds a directed acyclic graph (DAG) of dependencies:
+When you read a signal inside a memo or effect, Lattice automatically records that dependency:
 
+```mermaid
+sequenceDiagram
+    participant User
+    participant Effect
+    participant Signal
+    participant Context
+    
+    User->>Effect: Create effect
+    Effect->>Context: Enter tracking context
+    Effect->>Signal: Read value
+    Signal->>Context: Register dependency
+    Effect->>Context: Exit context
+    
+    Note over Effect,Signal: Now Effect depends on Signal
+    
+    User->>Signal: Set new value
+    Signal->>Effect: Notify change
+    Effect->>Effect: Re-run
 ```
-+----------+     +----------+     +----------+
-| signal A | --> | memo X   | --> | effect 1 |
-+----------+     +----------+     +----------+
-                      |
-+----------+          |
-| signal B | ---------+
-+----------+
+
+### Update Propagation
+
+When a signal changes, updates flow through the dependency graph:
+
+```mermaid
+flowchart TB
+    subgraph "1. Signal Changes"
+        S[Signal A]
+    end
+    
+    subgraph "2. Mark Dirty"
+        M1[Memo X]
+        M2[Memo Y]
+    end
+    
+    subgraph "3. Recompute"
+        E1[Effect 1]
+        E2[Effect 2]
+    end
+    
+    S -->|mark maybe-dirty| M1
+    S -->|mark maybe-dirty| M2
+    M1 -->|if value changed| E1
+    M2 -->|if value changed| E2
 ```
 
-When signal A changes:
+This is O(delta) complexity - proportional to what changed, not total program size.
 
-1. Mark memo X as "maybe dirty"
-2. Check if memo X inputs actually changed
-3. If yes, recompute memo X
-4. Notify effect 1
+## Architecture
 
-This is O(delta) instead of O(n) - we only touch what changed.
+```mermaid
+flowchart TB
+    subgraph Python["Python Layer"]
+        API[User API]
+        DEC[Decorators]
+        WRAP[Type Wrappers]
+    end
+    
+    subgraph Rust["Rust Core"]
+        SIG[Signal Runtime]
+        MEM[Memo Cache]
+        EFF[Effect Scheduler]
+        GRAPH[Dependency Graph]
+    end
+    
+    subgraph Target["Execution Targets"]
+        SRV[Server Native]
+        WASM[Browser WASM]
+        HYB[Hybrid]
+    end
+    
+    API --> DEC
+    DEC --> WRAP
+    WRAP -->|PyO3| SIG
+    SIG --> GRAPH
+    MEM --> GRAPH
+    EFF --> GRAPH
+    
+    GRAPH --> SRV
+    GRAPH --> WASM
+    GRAPH --> HYB
+```
 
 ### Why Rust?
 
 The core is written in Rust for three reasons:
 
-1. **Performance**: Rust compiles to native code. No interpreter overhead.
-2. **Parallelism**: Rust escapes Python's GIL. True multi-threading.
-3. **Safety**: Rust's type system prevents memory bugs at compile time.
+1. **Performance**: Native code, no interpreter overhead
+2. **Parallelism**: No GIL, true multi-threading
+3. **Safety**: Memory bugs caught at compile time
 
-This follows the pattern used by Pydantic v2 (17x faster), Polars, and Ruff.
+This follows the pattern used by Pydantic v2 (17x faster with Rust core), Polars, and Ruff.
 
 ## Project Structure
 
@@ -182,47 +211,83 @@ This follows the pattern used by Pydantic v2 (17x faster), Polars, and Ruff.
 lattice/
     lattice-core/           # Rust crate
         src/
-            lib.rs          # PyO3 module exports
+            lib.rs          # PyO3 module entry
             reactive/       # Signal, Memo, Effect
-            graph/          # Dependency graph
-        python/lattice/     # Python API wrapper
-    docs/                   # Technical documentation
-    examples/               # Example applications
+            graph/          # Dependency tracking
+        python/
+            lattice/        # Python API wrapper
+    docs/                   # Documentation
+    examples/               # Example apps
 ```
 
-## Development
+## Quick Start
 
 ### Prerequisites
 
-- Rust 1.75 or later
-- Python 3.11 or later
-- maturin (`pip install maturin`)
+- Rust 1.75+
+- Python 3.11+
+- maturin
 
-### Build
+### Installation
 
 ```bash
-cd lattice-core
-maturin develop  # Build and install in development mode
+git clone https://github.com/matteso1/lattice
+cd lattice/lattice-core
+pip install maturin
+maturin develop
 ```
 
-### Test
+### Usage
 
-```bash
-cargo test       # Rust tests
-pytest tests/    # Python tests
+```python
+from lattice import signal, memo, effect
+
+# Create reactive state
+count = signal(0)
+name = signal("World")
+
+# Derive computed values
+@memo
+def greeting():
+    return f"Hello, {name.value}! Count: {count.value}"
+
+# React to changes
+@effect
+def on_change():
+    print(greeting())
+
+# Update state
+count.value = 1  # Prints: "Hello, World! Count: 1"
+name.value = "Lattice"  # Prints: "Hello, Lattice! Count: 1"
 ```
 
 ## Roadmap
 
-| Phase | Focus | Status |
-|-------|-------|--------|
-| 1 | Core reactive primitives | In Progress |
-| 2 | Rendering and transport | Planned |
-| 3 | Real-time collaboration | Planned |
-| 4 | Performance optimization | Planned |
+```mermaid
+gantt
+    title Development Phases
+    dateFormat  YYYY-MM-DD
+    section Phase 1
+    Reactive Primitives    :done, p1, 2026-01-09, 14d
+    section Phase 2
+    Rendering Pipeline     :p2, after p1, 28d
+    section Phase 3
+    Collaboration          :p3, after p2, 28d
+    section Phase 4
+    Performance Optimization :p4, after p3, 28d
+```
 
-See [docs/roadmap.md](docs/roadmap.md) for details.
+| Phase | Focus | Status |
+| ----- | ----- | ------ |
+| 1 | Reactive primitives (Signal, Memo, Effect) | In Progress |
+| 2 | Rendering and WebSocket transport | Planned |
+| 3 | CRDT-based collaboration | Planned |
+| 4 | JIT compilation and optimization | Planned |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
 
 ## License
 
-MIT
+MIT License. See [LICENSE](LICENSE).
