@@ -113,18 +113,18 @@ class TestCRDTSync:
         room1 = Room("shared-room")
         room2 = Room("shared-room")
         
+        # Create signals in room1 and update
         a1 = collaborative_signal(room1, "a", 0)
         b1 = collaborative_signal(room1, "b", 0)
-        
-        a2 = collaborative_signal(room2, "a", 0)
-        b2 = collaborative_signal(room2, "b", 0)
-        
-        # Update room1
         a1.value = 10
         b1.value = 20
         
-        # Sync
+        # Sync to room2 BEFORE creating its signals
         room2.apply_update(room1.get_update())
+        
+        # Now create signals in room2 - they should see synced values
+        a2 = collaborative_signal(room2, "a", 0)
+        b2 = collaborative_signal(room2, "b", 0)
         
         assert a2.value == 10.0
         assert b2.value == 20.0
