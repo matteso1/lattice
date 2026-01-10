@@ -1,249 +1,104 @@
 # Lattice Architecture
 
-This document describes the technical architecture of Lattice, a reactive Python framework with a Rust-powered core.
+## Overview
 
-## System Overview
+Lattice is a hybrid Python/Rust framework with four core layers.
 
 ```mermaid
 flowchart TB
-    subgraph User["User Code"]
-        APP["Python Application"]
+    subgraph Python[Python Layer]
+        API[User API: signal, memo, effect]
+        Component[Component Model: VNode, diff]
+        Collab[Collaboration: Room, CRDT]
+        Tracer[JIT Tracer: TracedValue]
     end
     
-    subgraph Python["Python Layer"]
-        API["Public API<br/>signal, memo, effect"]
-        CTX["ReactiveContext<br/>Thread-local tracking"]
-        WRAP["Type Wrappers<br/>Signal, Memo, Effect"]
+    subgraph Rust[Rust Core]
+        Signal[Signal Runtime]
+        Graph[Dependency Graph]
+        JIT[Cranelift JIT]
     end
     
-    subgraph Rust["Rust Core (PyO3)"]
-        SIG["Signal Runtime<br/>Mutable state, notifications"]
-        RT["Runtime<br/>Global registry, scheduling"]
-        GRAPH["Dependency Graph<br/>Topological ordering"]
+    subgraph Output
+        Browser[Browser via WebSocket]
+        Native[Native Code]
     end
     
-    subgraph Future["Future Components"]
-        RENDER["Rendering Pipeline"]
-        TRANSPORT["WebSocket Transport"]
-        CRDT["CRDT Collaboration"]
-    end
-    
-    APP --> API
-    API --> CTX
-    CTX --> WRAP
-    WRAP --> SIG
-    SIG --> RT
-    RT --> GRAPH
-    
-    GRAPH -.-> RENDER
-    RENDER -.-> TRANSPORT
-    TRANSPORT -.-> CRDT
+    API --> Signal
+    Component --> Browser
+    Collab --> Browser
+    Tracer --> JIT --> Native
+    Signal --> Graph
 ```
 
-## Core Components
+## Core Modules
 
-### 1. Reactive Primitives
+### Phase 1: Reactive Runtime
 
-The foundation of Lattice is three reactive primitives:
+| Module | Location | Purpose |
+| ------ | -------- | ------- |
+| Signal | `src/reactive/signal.rs` | Mutable state container |
+| Memo | `python/lattice/__init__.py` | Cached derived values |
+| Effect | `python/lattice/__init__.py` | Side effects on change |
+| Runtime | `src/reactive/runtime.rs` | Dependency tracking |
 
-```mermaid
-flowchart LR
-    subgraph Primitives
-        S["Signal<br/>Mutable state"]
-        M["Memo<br/>Cached derived value"]
-        E["Effect<br/>Side effect"]
-    end
-    
-    S -->|"notifies"| M
-    S -->|"notifies"| E
-    M -->|"notifies"| E
-```
+### Phase 2: Component System
 
-| Primitive | Purpose | Evaluation | Thread-Safe |
-| --------- | ------- | ---------- | ----------- |
-| Signal | Hold mutable state | Immediate | Yes |
-| Memo | Cache derived values | Lazy (on access) | Yes |
-| Effect | Run side effects | Eager (on change) | Yes |
+| Module | Location | Purpose |
+| ------ | -------- | ------- |
+| VNode | `python/lattice/component.py` | Virtual DOM node |
+| Diff | `python/lattice/diff.py` | Tree diff algorithm |
+| Server | `python/lattice/server.py` | WebSocket server |
 
-### 2. Dependency Tracking
+### Phase 3: Collaboration
 
-Dependencies are tracked automatically using a context stack:
+| Module | Location | Purpose |
+| ------ | -------- | ------- |
+| Room | `python/lattice/collab.py` | CRDT document wrapper |
+| CollaborativeSignal | `python/lattice/collab.py` | Synced reactive state |
+
+### Phase 4: JIT Compilation
+
+| Module | Location | Purpose |
+| ------ | -------- | ------- |
+| Tracer | `python/lattice/tracer.py` | Python op tracing |
+| IR | `src/jit/ir.rs` | Intermediate representation |
+| Codegen | `src/jit/codegen.rs` | Cranelift compilation |
+
+## Data Flow
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant Effect
-    participant Context
     participant Signal
+    participant Graph
+    participant Memo
+    participant Effect
     
-    User->>Effect: Create effect
-    Effect->>Context: Push context
-    Effect->>Signal: Read value
-    Signal->>Context: Register dependency
-    Effect->>Context: Pop context
-    
-    Note over Effect,Signal: Dependency established
-    
-    User->>Signal: Set new value
-    Signal->>Effect: Notify change
-    Effect->>Effect: Re-run
+    User->>Signal: set(newValue)
+    Signal->>Graph: notify_dependents()
+    Graph->>Memo: mark_dirty()
+    Graph->>Effect: schedule()
+    Effect->>Memo: get() (recomputes if dirty)
+    Effect->>Effect: run side effect
 ```
 
-**Implementation:**
+## Design Decisions
 
-- Thread-local stack (`_ReactiveContext`)
-- Each memo/effect pushes itself onto the stack
-- Signal reads check the stack and register dependencies
-- On pop, memo/effect subscribes to all tracked signals
+### Why Rust Core?
 
-### 3. Update Propagation
+- No GIL for true parallelism
+- Native performance (10-100x Python)
+- Memory safety guarantees
 
-When a signal changes, updates propagate through the graph:
+### Why Python API?
 
-```mermaid
-flowchart TD
-    subgraph "1. Signal Changes"
-        S[Signal A]
-    end
-    
-    subgraph "2. Mark Phase"
-        M1[Memo X<br/>mark dirty]
-        M2[Memo Y<br/>mark dirty]
-        E1[Effect 1<br/>schedule]
-    end
-    
-    subgraph "3. Execute Phase"
-        RUN[Run scheduled effects]
-    end
-    
-    S --> M1
-    S --> M2
-    S --> E1
-    M1 --> RUN
-    M2 --> RUN
-    E1 --> RUN
-```
+- Familiar syntax for data scientists
+- Rich ecosystem integration
+- Rapid prototyping
 
-**Key behaviors:**
+### Why Cranelift over LLVM?
 
-- Memos are lazy: marked dirty but not recomputed until accessed
-- Effects are eager: scheduled and run immediately
-- Diamond dependencies: handled correctly (each node runs once)
-
-### 4. Runtime Registry
-
-The global runtime tracks all reactive values:
-
-```mermaid
-flowchart LR
-    subgraph Runtime
-        REG[Registry<br/>SubscriberId -> Reactive]
-        DEPS[Dependencies<br/>SignalId -> Subscribers]
-    end
-    
-    subgraph Operations
-        ADD[Register]
-        REM[Unregister]
-        NOTIFY[Notify Change]
-    end
-    
-    ADD --> REG
-    REM --> REG
-    NOTIFY --> DEPS
-    DEPS --> REG
-```
-
-**Data structures:**
-
-- `OnceLock<RwLock<HashMap>>` for thread-safe lazy initialization
-- Weak references to avoid preventing cleanup
-- Automatic cleanup on handle drop
-
-## Data Flow
-
-### Read Path
-
-```mermaid
-flowchart LR
-    A[User reads signal.value] --> B{Active context?}
-    B -->|Yes| C[Track dependency]
-    B -->|No| D[Return value]
-    C --> D
-```
-
-### Write Path
-
-```mermaid
-flowchart LR
-    A[User sets signal.value] --> B[Update value]
-    B --> C[Notify local subscribers]
-    C --> D[Notify runtime]
-    D --> E[Mark memos dirty]
-    E --> F[Schedule effects]
-    F --> G[Run effects]
-```
-
-## File Structure
-
-```
-lattice-core/
-    src/
-        lib.rs              # PyO3 module entry
-        reactive/
-            mod.rs          # Module exports
-            signal.rs       # Signal<T> and PySignal
-            memo.rs         # Memo<T> with caching
-            effect.rs       # Effect with scheduling
-            context.rs      # ReactiveContext stack
-            runtime.rs      # Global registry
-            subscriber.rs   # SubscriberId type
-        graph/
-            mod.rs          # Graph module
-            node.rs         # Node types
-            scheduler.rs    # Update scheduler
-    python/
-        lattice/
-            __init__.py     # Python API
-```
-
-## Performance Characteristics
-
-| Operation | Complexity | Notes |
-| --------- | ---------- | ----- |
-| Signal read | O(1) | Hash lookup for context check |
-| Signal write | O(k) | k = number of direct dependents |
-| Memo compute | O(1) + f(n) | f(n) = user computation time |
-| Effect run | O(1) + f(n) | f(n) = user function time |
-| Update propagation | O(delta) | Only touched nodes, not full graph |
-
-## Thread Safety
-
-All primitives are thread-safe:
-
-- `Signal`: `Arc<RwLock<T>>` for value storage
-- `Memo`: `Arc<RwLock>` for cache and state
-- `Effect`: `AtomicBool` for disposal flag
-- `Runtime`: `OnceLock + RwLock` for global state
-- `Context`: Thread-local (no sharing needed)
-
-## Future Architecture
-
-### Phase 2: Rendering
-
-```mermaid
-flowchart LR
-    STATE[Reactive State] --> VDOM[Virtual DOM]
-    VDOM --> DIFF[Diff Engine]
-    DIFF --> PATCH[UI Patches]
-    PATCH --> CLIENT[Browser Client]
-```
-
-### Phase 3: Collaboration
-
-```mermaid
-flowchart LR
-    CLIENT1[Client A] --> CRDT[CRDT Layer]
-    CLIENT2[Client B] --> CRDT
-    CRDT --> MERGE[Automatic Merge]
-    MERGE --> SYNC[Sync to All]
-```
+- Pure Rust (no system dependencies)
+- Fast compile times
+- Used by rustc itself
