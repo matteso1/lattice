@@ -43,6 +43,8 @@
 
 pub mod reactive;
 pub mod graph;
+pub mod jit;
+
 
 use pyo3::prelude::*;
 
