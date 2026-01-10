@@ -56,6 +56,9 @@ use pyo3::prelude::*;
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register reactive primitives
     m.add_class::<reactive::PySignal>()?;
+    
+    // Register JIT compiler
+    m.add_class::<jit::PyJitCompiler>()?;
 
     // Add version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

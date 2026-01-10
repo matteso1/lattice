@@ -26,7 +26,7 @@ pub struct CompiledFunction {
     /// Function pointer
     func_ptr: JitFn,
     /// Number of inputs
-    num_inputs: usize,
+    pub num_inputs: usize,
 }
 
 impl CompiledFunction {
